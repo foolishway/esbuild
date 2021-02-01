@@ -29,6 +29,8 @@ func newTransformOptions() api.TransformOptions {
 	}
 }
 
+// foolishway笔记：
+// parseOptionsImpl 遍历osArgs生成BuildOptions、TransformOptions
 func parseOptionsImpl(osArgs []string, buildOpts *api.BuildOptions, transformOpts *api.TransformOptions) error {
 	hasBareSourceMapFlag := false
 
@@ -527,6 +529,8 @@ func parseOptionsForRun(osArgs []string) (*api.BuildOptions, *api.TransformOptio
 	return nil, &options, nil
 }
 
+// foolishway笔记：
+// runImpl 由cli/cli.go Run调用
 func runImpl(osArgs []string) int {
 	shouldPrintSummary := false
 	start := time.Now()
@@ -575,6 +579,8 @@ func runImpl(osArgs []string) int {
 			}
 		}
 
+		// foolishway笔记：
+		// EntryPoints 和 Stdin不能同时存在，否则返回 1，
 		// Read from stdin when there are no entry points
 		if len(buildOptions.EntryPoints) == 0 {
 			if buildOptions.Stdin == nil {
