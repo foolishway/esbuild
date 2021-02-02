@@ -1093,6 +1093,9 @@ type pluginImpl struct {
 	plugin config.Plugin
 }
 
+// foolishway笔记：
+// loadPlugins遍历plugins，调用plugin的SetUp方法，SetUp方法调用pluginImpl的OnResolve
+// OnResolve会在config.Plugin.OnResolve里append一个config.OnResolve
 func (impl *pluginImpl) OnResolve(options OnResolveOptions, callback func(OnResolveArgs) (OnResolveResult, error)) {
 	filter, err := config.CompileFilterForPlugin(impl.plugin.Name, "OnResolve", options.Filter)
 	if filter == nil {
@@ -1136,6 +1139,9 @@ func (impl *pluginImpl) OnResolve(options OnResolveOptions, callback func(OnReso
 	})
 }
 
+// foolishway笔记：
+// loadPlugins遍历plugins，调用plugin的SetUp方法，SetUp方法调用pluginImpl的OnLoad
+// OnLoad会在config.Plugin.OnLoad里append一个config.OnLoad
 func (impl *pluginImpl) OnLoad(options OnLoadOptions, callback func(OnLoadArgs) (OnLoadResult, error)) {
 	filter, err := config.CompileFilterForPlugin(impl.plugin.Name, "OnLoad", options.Filter)
 	if filter == nil {
