@@ -366,6 +366,8 @@ var jsTable = map[JSFeature]map[Engine][]int{
 	},
 }
 
+// foolishway 笔记：
+// 判断版本是否小于最低要求版本
 func isVersionLessThan(a []int, b []int) bool {
 	for i := 0; i < len(a) && i < len(b); i++ {
 		if a[i] > b[i] {
