@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+* Special-case certain syntax with `--format=esm` ([#749](https://github.com/evanw/esbuild/issues/749))
+
+    You can now no longer use the following syntax features with the `esm` output format:
+
+    * The `with` statement: `with (x) {}`
+    * Delete of a bare identifier: `delete x`
+
+    In addition, the following syntax features are transformed when using the `esm` output format:
+
+    * For-in variable initializers: `for (var x = y in {}) {}` → `x = y; for (var x in {}) {}`
+
+    The reason is because all JavaScript engines interpret code in the `esm` output format as strict mode and these syntax features are disallowed in strict mode. Note that this new strict mode handling behavior in esbuild is only dependent on the output format. It does not depend on the presence or absence of `"use strict"` directives.
+
+* Basic `"use strict"` tracking
+
+    The JavaScript parser now tracks `"use strict"` directives and propagates strict mode status through the code. In addition, files containing the `import` and/or `export` keywords are also considered to be in strict mode. Strict mode handling is complex and esbuild currently doesn't implement all strict mode checks. But the changes in this release are a starting point. It is now an error to use a `with` statement or a `delete` statement of a bare identifier within a strict mode scope.
+
+* Fix a minifier bug with `with` statements
+
+    The minifier removes references to local variables if they are unused. However, that's not correct to do inside a `with` statement scope because what appears to be an identifier may actually be a property access, and property accesses could have arbitrary side effects if they resolve to a getter or setter method. Now all identifier expressions inside `with` statements are preserved when minifying.
+
+## 0.8.40
+
+* Fix TypeScript parameter decorators on class constructors ([#734](https://github.com/evanw/esbuild/issues/734))
+
+    This release fixes a TypeScript translation bug where parameter decorators on class constructors were translated incorrectly. Affected code looks like this:
+
+    ```js
+    class Example {
+      constructor(@decorator param: any) {}
+    }
+    ```
+
+    This bug has been fixed. In addition, decorators are no longer allowed on class constructors themselves because they are not allowed in TypeScript.
+
+* Resolve `browser` entries in `package.json` with no file extension ([#740](https://github.com/evanw/esbuild/issues/740))
+
+    This fix changes how esbuild interprets the `browser` field in `package.json`. It will now remap imports without a file extension to `browser` map entries without a file extension, which improves compatibility with Webpack. Specifically, a `package.json` file with `"browser": {"./file": "./something.js"}` will now match an import of `./file`. Previously the `package.json` file had to contain something like `"browser": {"./file.js": "./something.js"}` instead. Note that for compatibility with the rest of the ecosystem, a remapping of `./file` will counter-intuitively _not_ match an import of `./file.js` even though it works fine in the other direction.
+
+* Warning: npm v7 bug may prevent esbuild installation
+
+    This is a warning for people reading these release notes, not a code change. I have discovered a bug in npm v7 where your `package-lock.json` file can become corrupted such that no `postinstall` scripts are run. This bug affects all packages with `postinstall` scripts, not just esbuild, and happens when running npm v7 on a `package-lock.json` file from npm v6 or earlier. It seems like deleting and regenerating your `package-lock.json` file is a valid workaround that should get esbuild working again.
+
 ## 0.8.39
 
 * Fix the JavaScript watch mode API exiting early ([#730](https://github.com/evanw/esbuild/issues/730))

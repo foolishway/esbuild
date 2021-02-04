@@ -501,6 +501,11 @@ type EClass struct{ Class Class }
 type EIdentifier struct {
 	Ref Ref
 
+	// If we're inside a "with" statement, this identifier may be a property
+	// access. In that case it would be incorrect to remove this identifier since
+	// the property access may be a getter or setter with side effects.
+	MustKeepDueToWithStmt bool
+
 	// If true, this identifier is known to not have a side effect (i.e. to not
 	// throw an exception) when referenced. If false, this identifier may or may
 	// not have side effects when referenced. This is used to allow the removal
@@ -1476,6 +1481,26 @@ type Scope struct {
 	// inside that scope can be renamed. We conservatively assume that the
 	// evaluated code might reference anything that it has access to.
 	ContainsDirectEval bool
+
+	StrictMode StrictModeKind
+}
+
+type StrictModeKind uint8
+
+const (
+	SloppyMode StrictModeKind = iota
+	ExplicitStrictMode
+	ImplicitStrictModeImport
+	ImplicitStrictModeExport
+)
+
+func (s *Scope) RecursiveSetStrictMode(kind StrictModeKind) {
+	if s.StrictMode == SloppyMode {
+		s.StrictMode = kind
+		for _, child := range s.Children {
+			child.RecursiveSetStrictMode(kind)
+		}
+	}
 }
 
 type SymbolMap struct {

@@ -101,8 +101,8 @@ type parser struct {
 	exportStarImportRecords     []uint32
 
 	// These are for handling ES6 imports and exports
-	hasES6ImportSyntax      bool
-	hasES6ExportSyntax      bool
+	es6ImportKeyword        logger.Range
+	es6ExportKeyword        logger.Range
 	importItemsForNamespace map[js_ast.Ref]map[string]js_ast.LocRef
 	isImportItem            map[js_ast.Ref]bool
 	namedImports            map[js_ast.Ref]js_ast.NamedImport
@@ -856,6 +856,7 @@ func (p *parser) pushScopeForParsePass(kind js_ast.ScopeKind, loc logger.Loc) in
 	}
 	if parent != nil {
 		parent.Children = append(parent.Children, scope)
+		scope.StrictMode = parent.StrictMode
 	}
 	p.currentScope = scope
 
@@ -2846,7 +2847,7 @@ func (p *parser) parsePrefix(level js_ast.L, errors *deferredErrors, flags exprF
 		return js_ast.Expr{}
 
 	case js_lexer.TImport:
-		p.hasES6ImportSyntax = true
+		p.es6ImportKeyword = p.lexer.Range()
 		p.lexer.Next()
 		return p.parseImportExpr(loc, level)
 
@@ -4501,6 +4502,7 @@ func (p *parser) parseClass(name *js_ast.LocRef, classOpts parseClassOpts) js_as
 		}
 
 		// Parse decorators for this property
+		firstDecoratorLoc := p.lexer.Loc()
 		if opts.allowTSDecorators {
 			opts.tsDecorators = p.parseTypeScriptDecorators()
 		}
@@ -4508,6 +4510,13 @@ func (p *parser) parseClass(name *js_ast.LocRef, classOpts parseClassOpts) js_as
 		// This property may turn out to be a type in TypeScript, which should be ignored
 		if property, ok := p.parseProperty(js_ast.PropertyNormal, opts, nil); ok {
 			properties = append(properties, property)
+
+			// Forbid decorators on class constructors
+			if len(opts.tsDecorators) > 0 {
+				if key, ok := property.Key.Data.(*js_ast.EString); ok && js_lexer.UTF16EqualsString(key.Value, "constructor") {
+					p.log.AddError(&p.source, firstDecoratorLoc, "TypeScript does not allow decorators on class constructors")
+				}
+			}
 		}
 	}
 
@@ -4682,7 +4691,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 
 	case js_lexer.TExport:
 		if opts.isModuleScope {
-			p.hasES6ExportSyntax = true
+			p.es6ExportKeyword = p.lexer.Range()
 		} else if !opts.isNamespaceScope {
 			p.lexer.Unexpected()
 		}
@@ -5354,7 +5363,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		return js_ast.Stmt{Loc: loc, Data: &js_ast.SFor{Init: init, Test: test, Update: update, Body: body}}
 
 	case js_lexer.TImport:
-		p.hasES6ImportSyntax = true
+		p.es6ImportKeyword = p.lexer.Range()
 		p.lexer.Next()
 		stmt := js_ast.SImport{}
 		wasOriginallyBareImport := false
@@ -5733,7 +5742,7 @@ func (p *parser) parseStmt(opts parseStmtOpts) js_ast.Stmt {
 		p.lexer.ExpectOrInsertSemicolon()
 
 		// Parse a "use strict" directive
-		if str, ok := expr.Data.(*js_ast.EString); ok && js_lexer.UTF16EqualsString(str.Value, "use strict") {
+		if str, ok := expr.Data.(*js_ast.EString); ok && !str.PreferTemplate && js_lexer.UTF16EqualsString(str.Value, "use strict") {
 			return js_ast.Stmt{Loc: loc, Data: &js_ast.SDirective{Value: str.Value}}
 		}
 
@@ -5826,6 +5835,27 @@ func (p *parser) parseStmtsUpTo(end js_lexer.T, opts parseStmtOpts) []js_ast.Stm
 		if p.options.ts.Parse {
 			if _, ok := stmt.Data.(*js_ast.STypeScript); ok {
 				continue
+			}
+		}
+
+		// Track "use strict" directives
+		if directive, ok := stmt.Data.(*js_ast.SDirective); ok && js_lexer.UTF16EqualsString(directive.Value, "use strict") {
+			hasEffect := false
+			if p.currentScope.Kind.StopsHoisting() {
+				hasEffect = true
+
+				// Skip over comments when checking if "use strict" is the first statement
+				for _, stmt := range stmts {
+					if _, ok := stmt.Data.(*js_ast.SComment); !ok {
+						hasEffect = false
+						break
+					}
+				}
+			}
+			if hasEffect {
+				p.currentScope.StrictMode = js_ast.ExplicitStrictMode
+			} else if !p.options.suppressWarningsAboutWeirdCode {
+				p.log.AddRangeWarning(&p.source, p.source.RangeOfString(stmt.Loc), "This \"use strict\" directive has no effect here")
 			}
 		}
 
@@ -7772,6 +7802,7 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		}
 
 	case *js_ast.SWith:
+		p.markStrictModeFeature(withStatement, js_lexer.RangeOfIdentifier(p.source, stmt.Loc))
 		s.Value = p.visitExpr(s.Value)
 		p.pushScopeForVisitPass(js_ast.ScopeWith, s.BodyLoc)
 		s.Body = p.visitSingleStmt(s.Body, stmtsNormal)
@@ -7873,6 +7904,20 @@ func (p *parser) visitAndAppendStmt(stmts []js_ast.Stmt, stmt js_ast.Stmt) []js_
 		s.Body = p.visitLoopBody(s.Body)
 		p.popScope()
 		p.lowerObjectRestInForLoopInit(s.Init, &s.Body)
+
+		// Lower for-in variable initializers for strict-mode output formats
+		if p.isStrictModeOutputFormat() {
+			if local, ok := s.Init.Data.(*js_ast.SLocal); ok && local.Kind == js_ast.LocalVar && len(local.Decls) == 1 {
+				decl := &local.Decls[0]
+				if id, ok := decl.Binding.Data.(*js_ast.BIdentifier); ok && decl.Value != nil {
+					stmts = append(stmts, js_ast.Stmt{Loc: stmt.Loc, Data: &js_ast.SExpr{Value: js_ast.Assign(
+						js_ast.Expr{Loc: decl.Binding.Loc, Data: &js_ast.EIdentifier{Ref: id.Ref}},
+						*decl.Value,
+					)}})
+					decl.Value = nil
+				}
+			}
+		}
 
 	case *js_ast.SForOf:
 		p.pushScopeForVisitPass(js_ast.ScopeBlock, stmt.Loc)
@@ -8457,9 +8502,10 @@ func (p *parser) jsxStringsToMemberExpression(loc logger.Loc, parts []string) js
 	}
 
 	// Generate an identifier for the first part
-	ref := p.findSymbol(loc, parts[0]).ref
+	result := p.findSymbol(loc, parts[0])
 	value := p.handleIdentifier(loc, js_ast.AssignTargetNone, false, &js_ast.EIdentifier{
-		Ref: ref,
+		Ref:                   result.ref,
+		MustKeepDueToWithStmt: result.isInsideWithScope,
 
 		// Enable tree shaking
 		CanBeRemovedIfUnused: true,
@@ -8883,7 +8929,7 @@ func (p *parser) visitExpr(expr js_ast.Expr) js_ast.Expr {
 
 func (p *parser) valueForThis(loc logger.Loc) (js_ast.Expr, bool) {
 	if p.options.mode != config.ModePassThrough && !p.fnOnlyDataVisit.isThisNested {
-		if p.hasES6ImportSyntax || p.hasES6ExportSyntax {
+		if p.es6ImportKeyword.Len > 0 || p.es6ExportKeyword.Len > 0 {
 			// In an ES6 module, "this" is supposed to be undefined. Instead of
 			// doing this at runtime using "fn.call(undefined)", we do it at
 			// compile time using expression substitution here.
@@ -9046,6 +9092,7 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 		isDeleteTarget := e == p.deleteTarget
 		name := p.loadNameFromRef(e.Ref)
 		result := p.findSymbol(expr.Loc, name)
+		e.MustKeepDueToWithStmt = result.isInsideWithScope
 		e.Ref = result.ref
 
 		// Handle assigning to a constant
@@ -9768,6 +9815,8 @@ func (p *parser) visitExprInOut(expr js_ast.Expr, in exprIn) (js_ast.Expr, exprO
 				if _, ok := e2.Target.Data.(*js_ast.ESuper); ok {
 					superPropLoc = e2.Target.Loc
 				}
+			case *js_ast.EIdentifier:
+				p.markStrictModeFeature(deleteBareName, js_lexer.RangeOfIdentifier(p.source, e.Value.Loc))
 			}
 			if !p.options.suppressWarningsAboutWeirdCode && superPropLoc.Start != 0 {
 				r := js_lexer.RangeOfIdentifier(p.source, superPropLoc)
@@ -11298,6 +11347,10 @@ func (p *parser) exprCanBeRemovedIfUnused(expr js_ast.Expr) bool {
 		return p.classCanBeRemovedIfUnused(e.Class)
 
 	case *js_ast.EIdentifier:
+		if e.MustKeepDueToWithStmt {
+			return false
+		}
+
 		// Unbound identifiers cannot be removed because they can have side effects.
 		// One possible side effect is throwing a ReferenceError if they don't exist.
 		// Another one is a getter with side effects on the global object:
@@ -11422,6 +11475,9 @@ func (p *parser) simplifyUnusedExpr(expr js_ast.Expr) js_ast.Expr {
 		}
 
 	case *js_ast.EIdentifier:
+		if e.MustKeepDueToWithStmt {
+			break
+		}
 		if e.CanBeRemovedIfUnused || p.symbols[e.Ref.InnerIndex].Kind != js_ast.SymbolUnbound {
 			return js_ast.Expr{}
 		}
@@ -11859,6 +11915,14 @@ func (p *parser) validateJSX(span js_ast.Span, name string) []string {
 func (p *parser) prepareForVisitPass() {
 	p.pushScopeForVisitPass(js_ast.ScopeEntry, logger.Loc{Start: locModuleScope})
 	p.moduleScope = p.currentScope
+
+	// ECMAScript modules are always interpreted as strict mode
+	if p.es6ImportKeyword.Len > 0 {
+		p.moduleScope.RecursiveSetStrictMode(js_ast.ImplicitStrictModeImport)
+	} else if p.es6ExportKeyword.Len > 0 {
+		p.moduleScope.RecursiveSetStrictMode(js_ast.ImplicitStrictModeExport)
+	}
+
 	p.hoistSymbols(p.moduleScope)
 
 	if p.options.mode != config.ModePassThrough {
@@ -11913,7 +11977,7 @@ func (p *parser) declareCommonJSSymbol(kind js_ast.SymbolKind, name string) js_a
 	// Both the "exports" argument and "var exports" are hoisted variables, so
 	// they don't collide.
 	if ok && p.symbols[member.Ref.InnerIndex].Kind == js_ast.SymbolHoisted &&
-		kind == js_ast.SymbolHoisted && !p.hasES6ImportSyntax && !p.hasES6ExportSyntax {
+		kind == js_ast.SymbolHoisted && p.es6ImportKeyword.Len == 0 && p.es6ExportKeyword.Len == 0 {
 		return member.Ref
 	}
 
@@ -12154,7 +12218,7 @@ func (p *parser) toAST(source logger.Source, parts []js_ast.Part, hashbang strin
 		UsesModuleRef:     p.symbols[p.moduleRef.InnerIndex].UseCountEstimate > 0,
 
 		// ES6 features
-		HasES6Imports: p.hasES6ImportSyntax,
-		HasES6Exports: p.hasES6ExportSyntax,
+		HasES6Imports: p.es6ImportKeyword.Len > 0,
+		HasES6Exports: p.es6ExportKeyword.Len > 0,
 	}
 }

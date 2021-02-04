@@ -117,6 +117,55 @@ func (p *parser) markSyntaxFeature(feature compat.JSFeature, r logger.Range) (di
 	return
 }
 
+func (p *parser) isStrictMode() bool {
+	return p.currentScope.StrictMode != js_ast.SloppyMode
+}
+
+func (p *parser) isStrictModeOutputFormat() bool {
+	return p.options.outputFormat == config.FormatESModule
+}
+
+type strictModeFeature uint8
+
+const (
+	withStatement strictModeFeature = iota
+	deleteBareName
+)
+
+func (p *parser) markStrictModeFeature(feature strictModeFeature, r logger.Range) {
+	var text string
+	switch feature {
+	case withStatement:
+		text = "With statements"
+	case deleteBareName:
+		text = "Delete of a bare identifier"
+	default:
+		text = "This feature"
+	}
+	if p.isStrictMode() {
+		var keyword string
+		var notes []logger.MsgData
+		var keywordRange logger.Range
+		switch p.currentScope.StrictMode {
+		case js_ast.ImplicitStrictModeImport:
+			keyword = "import"
+			keywordRange = p.es6ImportKeyword
+		case js_ast.ImplicitStrictModeExport:
+			keyword = "export"
+			keywordRange = p.es6ExportKeyword
+		}
+		if len(keyword) != 0 {
+			notes = []logger.MsgData{logger.RangeData(&p.source, keywordRange,
+				fmt.Sprintf("This file is implicitly in strict mode because of the %q keyword", keyword))}
+		}
+		p.log.AddRangeErrorWithNotes(&p.source, r,
+			fmt.Sprintf("%s cannot be used in strict mode", text), notes)
+	} else if p.isStrictModeOutputFormat() {
+		p.log.AddRangeError(&p.source, r,
+			fmt.Sprintf("%s cannot be used with the \"esm\" output format due to strict mode", text))
+	}
+}
+
 // Mark the feature if "loweredFeature" is unsupported. This is used when one
 // feature is implemented in terms of another feature.
 func (p *parser) markLoweredSyntaxFeature(feature compat.JSFeature, r logger.Range, loweredFeature compat.JSFeature) {
@@ -1585,10 +1634,18 @@ func (p *parser) lowerClass(stmt js_ast.Stmt, expr js_ast.Expr, shadowRef js_ast
 		// Merge parameter decorators with method decorators
 		if p.options.ts.Parse && prop.IsMethod {
 			if fn, ok := prop.Value.Data.(*js_ast.EFunction); ok {
+				isConstructor := false
+				if key, ok := prop.Key.Data.(*js_ast.EString); ok {
+					isConstructor = js_lexer.UTF16EqualsString(key.Value, "constructor")
+				}
 				for i, arg := range fn.Fn.Args {
 					for _, decorator := range arg.TSDecorators {
 						// Generate a call to "__param()" for this parameter decorator
-						prop.TSDecorators = append(prop.TSDecorators,
+						var decorators *[]js_ast.Expr = &prop.TSDecorators
+						if isConstructor {
+							decorators = &class.TSDecorators
+						}
+						*decorators = append(*decorators,
 							p.callRuntime(decorator.Loc, "__param", []js_ast.Expr{
 								{Loc: decorator.Loc, Data: &js_ast.ENumber{Value: float64(i)}},
 								decorator,

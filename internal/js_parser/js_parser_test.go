@@ -195,6 +195,33 @@ func TestComments(t *testing.T) {
 	expectPrinted(t, "if(x-->y)z", "if (x-- > y)\n  z;\n")
 }
 
+func TestStrictMode(t *testing.T) {
+	expectPrinted(t, "'use strict'", "\"use strict\";\n")
+	expectPrinted(t, "`use strict`", "`use strict`;\n")
+	expectPrinted(t, "//! @license comment\n 'use strict'", "//! @license comment\n\"use strict\";\n")
+	expectPrinted(t, "/*! @license comment */ 'use strict'", "/*! @license comment */\n\"use strict\";\n")
+	expectPrinted(t, "function f() { //! @license comment\n 'use strict' }", "function f() {\n  //! @license comment\n  \"use strict\";\n}\n")
+	expectPrinted(t, "function f() { /*! @license comment */ 'use strict' }", "function f() {\n  /*! @license comment */\n  \"use strict\";\n}\n")
+	expectParseError(t, "0; 'use strict'", "<stdin>: warning: This \"use strict\" directive has no effect here\n")
+	expectParseError(t, "//! @license comment\n 'use strict'", "")
+	expectParseError(t, "/*! @license comment */ 'use strict'", "")
+	expectParseError(t, "function f() { //! @license comment\n 'use strict' }", "")
+	expectParseError(t, "function f() { /*! @license comment */ 'use strict' }", "")
+
+	expectPrinted(t, "with (x) y", "with (x)\n  y;\n")
+	expectParseError(t, "'use strict'; with (x) y", "<stdin>: error: With statements cannot be used in strict mode\n")
+
+	expectPrinted(t, "delete x", "delete x;\n")
+	expectParseError(t, "'use strict'; delete x", "<stdin>: error: Delete of a bare identifier cannot be used in strict mode\n")
+
+	expectPrinted(t, "function f() { 'use strict' } with (x) y", "function f() {\n  \"use strict\";\n}\nwith (x)\n  y;\n")
+	expectPrinted(t, "with (x) y; function f() { 'use strict' } ", "with (x)\n  y;\nfunction f() {\n  \"use strict\";\n}\n")
+	expectPrinted(t, "`use strict`; with (x) y", "`use strict`;\nwith (x)\n  y;\n")
+	expectParseError(t, "\"use strict\"; with (x) y", "<stdin>: error: With statements cannot be used in strict mode\n")
+	expectParseError(t, "function f() { 'use strict'; with (x) y }", "<stdin>: error: With statements cannot be used in strict mode\n")
+	expectParseError(t, "function f() { 'use strict'; function y() { with (x) y } }", "<stdin>: error: With statements cannot be used in strict mode\n")
+}
+
 func TestExponentiation(t *testing.T) {
 	expectPrinted(t, "--x ** 2", "--x ** 2;\n")
 	expectPrinted(t, "++x ** 2", "++x ** 2;\n")
@@ -2637,6 +2664,10 @@ func TestMangleUnused(t *testing.T) {
 	expectPrintedMangle(t, "a + b + 'c' + 'd'", "a + b + \"\";\n")
 	expectPrintedMangle(t, "'a' + 'b' + c + d", "\"\" + c + d;\n")
 	expectPrintedMangle(t, "(a + '') + (b + '')", "a + \"\" + (b + \"\");\n")
+
+	// Make sure identifiers inside "with" statements are kept
+	expectPrintedMangle(t, "with (a) []", "with (a)\n  ;\n")
+	expectPrintedMangle(t, "var a; with (b) a", "var a;\nwith (b)\n  a;\n")
 }
 
 func TestMangleInlineLocals(t *testing.T) {
