@@ -20,7 +20,9 @@ func expectPrintedCommon(t *testing.T, name string, contents string, expected st
 	t.Run(name, func(t *testing.T) {
 		t.Helper()
 		log := logger.NewDeferLog()
-		tree := css_parser.Parse(log, test.SourceForTest(contents), css_parser.Options{})
+		tree := css_parser.Parse(log, test.SourceForTest(contents), css_parser.Options{
+			RemoveWhitespace: options.RemoveWhitespace,
+		})
 		msgs := log.Done()
 		text := ""
 		for _, msg := range msgs {
@@ -96,6 +98,15 @@ func TestURLQuote(t *testing.T) {
 	expectPrinted(t, "* { background: url('\"foo\"') }", "* {\n  background: url('\"foo\"');\n}\n")
 }
 
+func TestNumber(t *testing.T) {
+	expectPrinted(t, "div { opacity: 0.2 }", "div {\n  opacity: 0.2;\n}\n")
+	expectPrinted(t, "div { opacity: 0.2% }", "div {\n  opacity: 0.2%;\n}\n")
+	expectPrinted(t, "div { opacity: 0.2px }", "div {\n  opacity: 0.2px;\n}\n")
+	expectPrintedMinify(t, "div { opacity: 0.2 }", "div{opacity:.2}")
+	expectPrintedMinify(t, "div { opacity: 0.2% }", "div{opacity:.2%}")
+	expectPrintedMinify(t, "div { opacity: 0.2px }", "div{opacity:.2px}")
+}
+
 func TestImportant(t *testing.T) {
 	expectPrinted(t, "a { b: c!important }", "a {\n  b: c !important;\n}\n")
 	expectPrinted(t, "a { b: c!important; }", "a {\n  b: c !important;\n}\n")
@@ -163,6 +174,98 @@ func TestDeclaration(t *testing.T) {
 	expectPrintedMinify(t, "* { unknown: x ( a + b ) }", "*{unknown:x (a + b)}")
 	expectPrintedMinify(t, "* { unknown: x ( a - b ) }", "*{unknown:x (a - b)}")
 	expectPrintedMinify(t, "* { unknown: x ( a , b ) }", "*{unknown:x (a,b)}")
+}
+
+func TestVerbatimWhitespace(t *testing.T) {
+	expectPrinted(t, "*{--x:}", "* {\n  --x:;\n}\n")
+	expectPrinted(t, "*{--x: }", "* {\n  --x: ;\n}\n")
+	expectPrinted(t, "* { --x:; }", "* {\n  --x:;\n}\n")
+	expectPrinted(t, "* { --x: ; }", "* {\n  --x: ;\n}\n")
+
+	expectPrintedMinify(t, "*{--x:}", "*{--x:}")
+	expectPrintedMinify(t, "*{--x: }", "*{--x: }")
+	expectPrintedMinify(t, "* { --x:; }", "*{--x:}")
+	expectPrintedMinify(t, "* { --x: ; }", "*{--x: }")
+
+	expectPrinted(t, "*{--x:!important}", "* {\n  --x:!important;\n}\n")
+	expectPrinted(t, "*{--x: !important}", "* {\n  --x: !important;\n}\n")
+	expectPrinted(t, "*{ --x:!important }", "* {\n  --x:!important;\n}\n")
+	expectPrinted(t, "*{ --x: !important }", "* {\n  --x: !important;\n}\n")
+	expectPrinted(t, "* { --x:!important; }", "* {\n  --x:!important;\n}\n")
+	expectPrinted(t, "* { --x: !important; }", "* {\n  --x: !important;\n}\n")
+	expectPrinted(t, "* { --x:! important ; }", "* {\n  --x:!important;\n}\n")
+	expectPrinted(t, "* { --x: ! important ; }", "* {\n  --x: !important;\n}\n")
+
+	expectPrintedMinify(t, "*{--x:!important}", "*{--x:!important}")
+	expectPrintedMinify(t, "*{--x: !important}", "*{--x: !important}")
+	expectPrintedMinify(t, "*{ --x:!important }", "*{--x:!important}")
+	expectPrintedMinify(t, "*{ --x: !important }", "*{--x: !important}")
+	expectPrintedMinify(t, "* { --x:!important; }", "*{--x:!important}")
+	expectPrintedMinify(t, "* { --x: !important; }", "*{--x: !important}")
+	expectPrintedMinify(t, "* { --x:! important ; }", "*{--x:!important}")
+	expectPrintedMinify(t, "* { --x: ! important ; }", "*{--x: !important}")
+
+	expectPrinted(t, "* { --x:y; }", "* {\n  --x:y;\n}\n")
+	expectPrinted(t, "* { --x: y; }", "* {\n  --x: y;\n}\n")
+	expectPrinted(t, "* { --x:y ; }", "* {\n  --x:y ;\n}\n")
+	expectPrinted(t, "* { --x:y, ; }", "* {\n  --x:y, ;\n}\n")
+	expectPrinted(t, "* { --x: var(y,); }", "* {\n  --x: var(y,);\n}\n")
+	expectPrinted(t, "* { --x: var(y, ); }", "* {\n  --x: var(y, );\n}\n")
+
+	expectPrintedMinify(t, "* { --x:y; }", "*{--x:y}")
+	expectPrintedMinify(t, "* { --x: y; }", "*{--x: y}")
+	expectPrintedMinify(t, "* { --x:y ; }", "*{--x:y }")
+	expectPrintedMinify(t, "* { --x:y, ; }", "*{--x:y, }")
+	expectPrintedMinify(t, "* { --x: var(y,); }", "*{--x: var(y,)}")
+	expectPrintedMinify(t, "* { --x: var(y, ); }", "*{--x: var(y, )}")
+
+	expectPrinted(t, "* { --x:(y); }", "* {\n  --x:(y);\n}\n")
+	expectPrinted(t, "* { --x:(y) ; }", "* {\n  --x:(y) ;\n}\n")
+	expectPrinted(t, "* { --x: (y); }", "* {\n  --x: (y);\n}\n")
+	expectPrinted(t, "* { --x:(y ); }", "* {\n  --x:(y );\n}\n")
+	expectPrinted(t, "* { --x:( y); }", "* {\n  --x:( y);\n}\n")
+
+	expectPrintedMinify(t, "* { --x:(y); }", "*{--x:(y)}")
+	expectPrintedMinify(t, "* { --x:(y) ; }", "*{--x:(y) }")
+	expectPrintedMinify(t, "* { --x: (y); }", "*{--x: (y)}")
+	expectPrintedMinify(t, "* { --x:(y ); }", "*{--x:(y )}")
+	expectPrintedMinify(t, "* { --x:( y); }", "*{--x:( y)}")
+
+	expectPrinted(t, "* { --x:f(y); }", "* {\n  --x:f(y);\n}\n")
+	expectPrinted(t, "* { --x:f(y) ; }", "* {\n  --x:f(y) ;\n}\n")
+	expectPrinted(t, "* { --x: f(y); }", "* {\n  --x: f(y);\n}\n")
+	expectPrinted(t, "* { --x:f(y ); }", "* {\n  --x:f(y );\n}\n")
+	expectPrinted(t, "* { --x:f( y); }", "* {\n  --x:f( y);\n}\n")
+
+	expectPrintedMinify(t, "* { --x:f(y); }", "*{--x:f(y)}")
+	expectPrintedMinify(t, "* { --x:f(y) ; }", "*{--x:f(y) }")
+	expectPrintedMinify(t, "* { --x: f(y); }", "*{--x: f(y)}")
+	expectPrintedMinify(t, "* { --x:f(y ); }", "*{--x:f(y )}")
+	expectPrintedMinify(t, "* { --x:f( y); }", "*{--x:f( y)}")
+
+	expectPrinted(t, "* { --x:[y]; }", "* {\n  --x:[y];\n}\n")
+	expectPrinted(t, "* { --x:[y] ; }", "* {\n  --x:[y] ;\n}\n")
+	expectPrinted(t, "* { --x: [y]; }", "* {\n  --x: [y];\n}\n")
+	expectPrinted(t, "* { --x:[y ]; }", "* {\n  --x:[y ];\n}\n")
+	expectPrinted(t, "* { --x:[ y]; }", "* {\n  --x:[ y];\n}\n")
+
+	expectPrintedMinify(t, "* { --x:[y]; }", "*{--x:[y]}")
+	expectPrintedMinify(t, "* { --x:[y] ; }", "*{--x:[y] }")
+	expectPrintedMinify(t, "* { --x: [y]; }", "*{--x: [y]}")
+	expectPrintedMinify(t, "* { --x:[y ]; }", "*{--x:[y ]}")
+	expectPrintedMinify(t, "* { --x:[ y]; }", "*{--x:[ y]}")
+
+	expectPrinted(t, "* { --x:{y}; }", "* {\n  --x:{y};\n}\n")
+	expectPrinted(t, "* { --x:{y} ; }", "* {\n  --x:{y} ;\n}\n")
+	expectPrinted(t, "* { --x: {y}; }", "* {\n  --x: {y};\n}\n")
+	expectPrinted(t, "* { --x:{y }; }", "* {\n  --x:{y };\n}\n")
+	expectPrinted(t, "* { --x:{ y}; }", "* {\n  --x:{ y};\n}\n")
+
+	expectPrintedMinify(t, "* { --x:{y}; }", "*{--x:{y}}")
+	expectPrintedMinify(t, "* { --x:{y} ; }", "*{--x:{y} }")
+	expectPrintedMinify(t, "* { --x: {y}; }", "*{--x: {y}}")
+	expectPrintedMinify(t, "* { --x:{y }; }", "*{--x:{y }}")
+	expectPrintedMinify(t, "* { --x:{ y}; }", "*{--x:{ y}}")
 }
 
 func TestAtRule(t *testing.T) {

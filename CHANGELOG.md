@@ -1,6 +1,91 @@
 # Changelog
 
-## Unreleased
+## 0.8.43
+
+* Support the `XDG_CACHE_HOME` environment variable ([#757](https://github.com/evanw/esbuild/issues/757))
+
+    On Linux, the install script for esbuild currently caches downloaded binary executables in `~/.cache/esbuild/bin`. This change means esbuild will now try installing to `$XDG_CACHE_HOME/esbuild/bin` instead of the `XDG_CACHE_HOME` environment variable exists. This allows you to customize the cache directory on Linux. The specification that defines `XDG_CACHE_HOME` is [here](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html).
+
+* Further improve constant folding of branches ([#765](https://github.com/evanw/esbuild/issues/765))
+
+    At a high level, this release adds the following substitutions to improve constant folding and dead code elimination:
+
+    * `if (anything && falsyWithSideEffects)` → `if (anything, falsyWithSideEffects)`
+    * `if (anything || truthyWithSideEffects)` → `if (anything, truthyWithSideEffects)`
+    * `if (anything && truthyNoSideEffects)` → `if (anything)`
+    * `if (anything || falsyNoSideEffects)` → `if (anything)`
+    * `if (anything, truthyOrFalsy)` → `anything; if (truthyOrFalsy)`
+
+    And also these substitutions for unused expressions:
+
+    * `primitive == primitive` → `primitive, primitive`
+    * `typeof identifier` → (remove entirely)
+
+    The actual substitutions are more complex since they are more comprehensive but they essentially result in this high-level behavior. Note that these substitutions are only done when minification is enabled.
+
+* Fix an edge case with CSS variable syntax ([#760](https://github.com/evanw/esbuild/issues/760))
+
+    CSS variables are whitespace-sensitive even though other CSS syntax is mostly not whitespace sensitive. It is apparently common for this to cause problems with CSS tooling that pretty-prints and minifies CSS, including esbuild before this release. Some examples of issues with other tools include [postcss/postcss#1404](https://github.com/postcss/postcss/issues/1404) and [tailwindlabs/tailwindcss#2889](https://github.com/tailwindlabs/tailwindcss/issues/2889). The issue affects code like this:
+
+    ```css
+    div {
+      --some-var: ;
+      some-decl: var(--some-var, );
+    }
+    ```
+
+    It would be a change in semantics to minify this code to either `--some-var:;` or `var(--some-var,)` due to the whitespace significance of CSS variables, so such transformations are invalid. With this release, esbuild should now preserve whitespace in these two situations (CSS variable declarations and CSS variable references).
+
+* Add support for recursive symlinks during path resolution ([#766](https://github.com/evanw/esbuild/issues/766))
+
+    Previously recursive symlinks (a symlink that points to another symlink) were an unhandled case in the path resolution algorithm. Now these cases should be supported up to a depth of 256 symlinks. This means esbuild's path resolution should now work with multi-level `yarn link` scenarios.
+
+* Fix subtle circular dependency issue ([#758](https://github.com/evanw/esbuild/issues/758))
+
+    If esbuild is used to transform TypeScript to JavaScript without bundling (i.e. each file is transformed individually), the output format is CommonJS, and the original TypeScript code contains an import cycle where at least one of the links in the cycle is an `export * as` re-export statement, there could be certain situations where evaluating the transformed code results in an import being `undefined`. This is caused by the `__esModule` marker being added after the call to `require()` for the first transformed re-export statement. The fix was to move the marker to before the first call to `require()`. The `__esModule` marker is a convention from Babel that esbuild reuses which marks a module as being originally in the ECMAScript module format instead of the CommonJS module format.
+
+* Add support for the `NODE_PATH` environment variable
+
+    This is a rarely-used feature of Node's module resolution algorithm. From [the documentation](https://nodejs.org/api/modules.html#modules_loading_from_the_global_folders):
+
+    > If the `NODE_PATH` environment variable is set to a colon-delimited list of absolute paths, then Node.js will search those paths for modules if they are not found elsewhere.
+    >
+    > On Windows, `NODE_PATH` is delimited by semicolons (`;`) instead of colons.
+
+    The CLI takes the list of node paths from the value of the `NODE_PATH` environment variable, but the JS and Go APIs take the list as an array of strings instead (called `nodePaths` in JS and `NodePaths` in Go).
+
+## 0.8.42
+
+* Fix crash with block-level function declaration and `--keep-names` ([#755](https://github.com/evanw/esbuild/issues/755))
+
+    This release fixes a crash with block-level function declarations and the `--keep-names` option. The crash affected code that looks like this:
+
+    ```js
+    if (true) function f() {}
+    assert.strictEqual(f.name, 'f')
+    ```
+
+* Disallow additional features in strict mode
+
+    This change improves esbuild's compliance with the JavaScript specification. It is now an error to use legacy octal numeric literals and the identifiers `implements`, `interface`, `let`, `package`, `private`, `protected`, `public`, `static`, and `yield` in strict mode code.
+
+* Basic support for watch mode with plugins ([#752](https://github.com/evanw/esbuild/issues/752))
+
+    With this release, watch mode should now work with simple [on-load plugins](https://esbuild.github.io/plugins/#load-callbacks). Watch mode is implemented by tracking all file system accesses made by esbuild as it does a build. However, this doesn't catch external file system accesses such as those made by plugins. Now if an on-load plugin is used on a path in the `file` namespace, esbuild will also read the file during watch mode so that watch mode is aware of the file system access. Note that there is not yet API support for a plugin to return additional paths for watch mode to monitor.
+
+* Make JavaScript API error format more consistent ([#745](https://github.com/evanw/esbuild/issues/745))
+
+    If a JavaScript error is thrown while validating the build options, the thrown error should now have `errors` and `warnings` properties just like normal build errors. Previously these properties were only present if the build itself failed but not if build options were invalid. This consistency should make it easier to process errors from the build API call.
+
+## 0.8.41
+
+* Fix memory leak with watch mode when using the CLI ([#750](https://github.com/evanw/esbuild/issues/750))
+
+    This release fixes a memory leak when using `--watch` from the CLI (command-line interface). When esbuild was in this state, every incremental build resulted in more memory being consumed. This problem did not affect users of the JS API or Go API, only users of the CLI API.
+
+    The problem was that the GC (garbage collector) was disabled. Oops. This is done by default for speed when you use esbuild via the CLI, which makes sense for most CLI use cases because the process is usually short-lived and doesn't need to waste time cleaning up memory. But it does not make sense for flags that cause esbuild to be a long-running process.
+
+    Previously the only exception to this rule was the `--serve` flag. When I added watch mode, I forgot to enable GC for the `--watch` flag too. With this release, the GC is enabled for both the `--serve` and the `--watch` flags so esbuild should no longer leak memory in watch mode.
 
 * Special-case certain syntax with `--format=esm` ([#749](https://github.com/evanw/esbuild/issues/749))
 
@@ -9,7 +94,7 @@
     * The `with` statement: `with (x) {}`
     * Delete of a bare identifier: `delete x`
 
-    In addition, the following syntax features are transformed when using the `esm` output format:
+    In addition, the following syntax feature is transformed when using the `esm` output format:
 
     * For-in variable initializers: `for (var x = y in {}) {}` → `x = y; for (var x in {}) {}`
 
@@ -17,11 +102,35 @@
 
 * Basic `"use strict"` tracking
 
-    The JavaScript parser now tracks `"use strict"` directives and propagates strict mode status through the code. In addition, files containing the `import` and/or `export` keywords are also considered to be in strict mode. Strict mode handling is complex and esbuild currently doesn't implement all strict mode checks. But the changes in this release are a starting point. It is now an error to use a `with` statement or a `delete` statement of a bare identifier within a strict mode scope.
+    The JavaScript parser now tracks `"use strict"` directives and propagates strict mode status through the code. In addition, files containing the `import` and/or `export` keywords are also considered to be in strict mode. Strict mode handling is complex and esbuild currently doesn't implement all strict mode checks. But the changes in this release are a starting point. It is now an error to use certain syntax features such as a `with` statement within a strict mode scope.
 
 * Fix a minifier bug with `with` statements
 
     The minifier removes references to local variables if they are unused. However, that's not correct to do inside a `with` statement scope because what appears to be an identifier may actually be a property access, and property accesses could have arbitrary side effects if they resolve to a getter or setter method. Now all identifier expressions inside `with` statements are preserved when minifying.
+
+* Transform block-level function declarations
+
+    Block-level function declarations are now transformed into equivalent syntax that avoids block-level declarations. Strict mode and non-strict mode have subtly incompatible behavior for how block-level function declarations are interpreted. Doing this transformation prevents problems with code that was originally strict mode that is run as non-strict mode and vice versa.
+
+    Now esbuild uses the presence or absence of a strict mode scope to determine how to interpret the block-level function declaration and then converts it to the equivalent unambiguous syntax such that it works the same regardless of whether or not the current scope is in strict mode:
+
+    ```js
+    // This original code:
+    while (!y) {
+      function y() {}
+    }
+
+    // is transformed into this code in strict mode:
+    while (!y) {
+      let y2 = function() {};
+    }
+
+    // and into this code when not in strict mode:
+    while (!y) {
+      let y2 = function() {};
+      var y = y2;
+    }
+    ```
 
 ## 0.8.40
 

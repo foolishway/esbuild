@@ -164,6 +164,7 @@ type Options struct {
 	MinifyIdentifiers bool
 	MangleSyntax      bool
 	CodeSplitting     bool
+	WatchMode         bool
 
 	// Setting this to true disables warnings about code that is very likely to
 	// be a bug. This is used to ignore issues inside "node_modules" directories.
@@ -197,6 +198,7 @@ type Options struct {
 
 	ExtensionOrder  []string
 	MainFields      []string
+	AbsNodePaths    []string // The "NODE_PATH" variable from Node.js
 	ExternalModules ExternalModules
 
 	AbsOutputFile      string

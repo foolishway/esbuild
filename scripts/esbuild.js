@@ -175,6 +175,22 @@ module.exports = ${JSON.stringify(exit0Map, null, 2)};
   await goBuildPromise;
 }
 
+// Writing a file atomically is important for watch mode tests since we don't
+// want to read the file after it has been truncated but before the new contents
+// have been written.
+exports.writeFileAtomic = (where, contents) => {
+  // Note: Can't use "os.tmpdir()" because that doesn't work on Windows. CI runs
+  // tests on D:\ and the temporary directory is on C:\ or the other way around.
+  // And apparently it's impossible to move files between C:\ and D:\ or something.
+  // So we have to write the file in the same directory as the destination. This is
+  // unfortunate because it will unnecessarily trigger extra watch mode rebuilds.
+  // So we have to make our tests extra robust so they can still work with random
+  // extra rebuilds thrown in.
+  const file = path.join(path.dirname(where), '.esbuild-atomic-file-' + Math.random().toString(36).slice(2))
+  fs.writeFileSync(file, contents)
+  fs.renameSync(file, where)
+}
+
 exports.buildBinary = () => {
   childProcess.execFileSync('go', ['build', '-ldflags=-s -w', './cmd/esbuild'], { cwd: repoDir, stdio: 'ignore' })
   return path.join(repoDir, process.platform === 'win32' ? 'esbuild.exe' : 'esbuild')

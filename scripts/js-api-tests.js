@@ -1,4 +1,4 @@
-const { installForTests, removeRecursiveSync } = require('./esbuild')
+const { installForTests, removeRecursiveSync, writeFileAtomic } = require('./esbuild')
 const { SourceMapConsumer } = require('source-map')
 const assert = require('assert')
 const path = require('path')
@@ -19,7 +19,7 @@ let buildTests = {
       await esbuild.build({ entryPoints: 'this is not an array', logLevel: 'silent' })
       throw new Error('Expected build failure');
     } catch (e) {
-      if (e.message !== '"entryPoints" must be an array') {
+      if (!e.errors || !e.errors[0] || e.errors[0].text !== '"entryPoints" must be an array') {
         throw e;
       }
     }
@@ -69,6 +69,30 @@ let buildTests = {
 
       assert.strictEqual(require(aOut).x, true)
       assert.strictEqual(require(bOut).y, true)
+    }
+  },
+
+  async nodePathsTest({ esbuild, service, testDir }) {
+    for (const toTest of [esbuild, service]) {
+      let srcDir = path.join(testDir, 'src');
+      let pkgDir = path.join(testDir, 'pkg');
+      let outfile = path.join(testDir, 'out.js');
+      let entry = path.join(srcDir, 'entry.js');
+      let other = path.join(pkgDir, 'other.js');
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.writeFileSync(entry, `export {x} from 'other'`);
+      fs.writeFileSync(other, `export let x = 123`);
+
+      await toTest.build({
+        entryPoints: [entry],
+        outfile,
+        bundle: true,
+        nodePaths: [pkgDir],
+        format: 'cjs',
+      })
+
+      assert.strictEqual(require(outfile).x, 123)
     }
   },
 
@@ -1655,7 +1679,7 @@ let watchTests = {
         // First rebuild: edit
         {
           const [error2, result2] = await rebuildUntil(
-            () => writeFileAsync(input, `throw 2`),
+            () => writeFileAtomic(input, `throw 2`),
             () => fs.readFileSync(outfile, 'utf8') === 'throw 2;\n',
           )
           assert.strictEqual(error2, null)
@@ -1666,7 +1690,7 @@ let watchTests = {
         // Second rebuild: edit
         {
           const [error2, result2] = await rebuildUntil(
-            () => writeFileAsync(input, `throw 3`),
+            () => writeFileAtomic(input, `throw 3`),
             () => fs.readFileSync(outfile, 'utf8') === 'throw 3;\n',
           )
           assert.strictEqual(error2, null)
@@ -1677,7 +1701,7 @@ let watchTests = {
         // Third rebuild: syntax error
         {
           const [error2, result2] = await rebuildUntil(
-            () => writeFileAsync(input, `throw 1 2`),
+            () => writeFileAtomic(input, `throw 1 2`),
             err => err,
           )
           assert.notStrictEqual(error2, null)
@@ -1691,7 +1715,7 @@ let watchTests = {
         // Fourth rebuild: edit
         {
           const [error2, result2] = await rebuildUntil(
-            () => writeFileAsync(input, `throw 4`),
+            () => writeFileAtomic(input, `throw 4`),
             () => fs.readFileSync(outfile, 'utf8') === 'throw 4;\n',
           )
           assert.strictEqual(error2, null)
@@ -1715,7 +1739,7 @@ let watchTests = {
         // Sixth rebuild: restore
         {
           const [error2, result2] = await rebuildUntil(
-            () => writeFileAsync(input, `throw 5`),
+            () => writeFileAtomic(input, `throw 5`),
             () => fs.readFileSync(outfile, 'utf8') === 'throw 5;\n',
           )
           assert.strictEqual(error2, null)
@@ -1770,7 +1794,7 @@ let watchTests = {
         // First rebuild: edit
         {
           const [error2, result2] = await rebuildUntil(
-            () => writeFileAsync(input, `throw 2`),
+            () => writeFileAtomic(input, `throw 2`),
             (err, res) => res.outputFiles[0].text === 'throw 2;\n',
           )
           assert.strictEqual(error2, null)
@@ -1781,7 +1805,7 @@ let watchTests = {
         // Second rebuild: edit
         {
           const [error2, result2] = await rebuildUntil(
-            () => writeFileAsync(input, `throw 3`),
+            () => writeFileAtomic(input, `throw 3`),
             (err, res) => res.outputFiles[0].text === 'throw 3;\n',
           )
           assert.strictEqual(error2, null)
@@ -1913,7 +1937,7 @@ let transformTests = {
       await service.transform(``, { jsxFactory: ['React', 'createElement'] })
       throw new Error('Expected transform failure');
     } catch (e) {
-      if (e.message !== '"jsxFactory" must be a string') {
+      if (!e.errors || !e.errors[0] || e.errors[0].text !== '"jsxFactory" must be a string') {
         throw e;
       }
     }
@@ -2785,9 +2809,9 @@ ${path.relative(process.cwd(), input).replace(/\\/g, '/')}:1:2: error: Unexpecte
       throw new Error('Expected an error to be thrown');
     } catch (error) {
       assert(error instanceof Error, 'Must be an Error object');
-      assert.strictEqual(error.message, `Cannot use "incremental" with a synchronous build`);
-      assert.strictEqual(error.errors, void 0);
-      assert.strictEqual(error.warnings, void 0);
+      assert.strictEqual(error.message, `Build failed with 1 error:\nerror: Cannot use "incremental" with a synchronous build`);
+      assert.strictEqual(error.errors.length, 1);
+      assert.strictEqual(error.warnings.length, 0);
     }
   },
 
